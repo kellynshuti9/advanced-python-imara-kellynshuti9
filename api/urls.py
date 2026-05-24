@@ -1,8 +1,9 @@
 from django.urls import path
-from .views import *
+from . import views
 
 urlpatterns = [
-    path('merchants/', MerchantListCreateView.as_view()),
-    path('financing/', FinancingRequestCreateView.as_view()),
-    path('lender/requests/', LenderRequestListView.as_view()),
+    path('merchants/', views.MerchantListCreateView.as_view(), name='merchant-list-create'),
+    path('financing-requests/', views.FinancingRequestCreateView.as_view(), name='financing-request-create'),
+    path('financing-requests/<int:pk>/', views.FinancingRequestDetailView.as_view(), name='financing-request-detail'),
+    path('lender/requests/', views.LenderRequestListView.as_view(), name='lender-request-list'),
 ]
