@@ -1,11 +1,15 @@
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from rest_framework.throttling import UserRateThrottle
 from rest_framework_simplejwt.views import TokenObtainPairView
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.db.models import Q, Sum, Count
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
+from django.contrib.auth import authenticate, login
+from django.contrib.auth.forms import AuthenticationForm
+from django.contrib.auth.decorators import login_required
 from .models import Merchant, FinancingRequest, AuditLog, User
 from .serializers import (
     MerchantSerializer,
@@ -19,6 +23,13 @@ from .serializers import (
 )
 from .permissions import RoleBasedPermission, IsMerchantOwner
 
+# ========== EXPORT RATE LIMITING ==========
+
+class ExportRateThrottle(UserRateThrottle):
+    """Rate limit for export endpoints (compliance control)"""
+    rate = '10/hour'  # Limited exports per hour
+
+
 # ========== AUTHENTICATION VIEWS ==========
 
 class CustomTokenObtainPairView(TokenObtainPairView):
@@ -28,7 +39,6 @@ class CustomTokenObtainPairView(TokenObtainPairView):
         response = super().post(request, *args, **kwargs)
         
         # Log successful login
-        from django.contrib.auth import authenticate
         user = authenticate(
             username=request.data.get('username'),
             password=request.data.get('password')
@@ -46,6 +56,100 @@ class CustomTokenObtainPairView(TokenObtainPairView):
             )
         
         return response
+
+
+class StaffLoginView(APIView):
+    """Session-based login for internal staff dashboard"""
+    permission_classes = [permissions.AllowAny]
+    
+    def post(self, request):
+        username = request.data.get('username')
+        password = request.data.get('password')
+        
+        user = authenticate(request, username=username, password=password)
+        
+        if user:
+            # Only staff roles can access dashboard
+            if user.role in ['admin', 'compliance', 'lender_partner', 'support']:
+                login(request, user)
+                
+                # Log staff login
+                AuditLog.objects.create(
+                    user=user,
+                    action='LOGIN',
+                    resource_type='User',
+                    resource_id=user.id,
+                    ip_address=request.META.get('REMOTE_ADDR'),
+                    user_agent=request.META.get('HTTP_USER_AGENT', ''),
+                    details={'login_time': str(timezone.now()), 'method': 'session'}
+                )
+                
+                return Response({
+                    "detail": "Logged in successfully",
+                    "role": user.role,
+                    "username": user.username
+                })
+            else:
+                return Response(
+                    {"detail": "Not authorized for staff access"},
+                    status=status.HTTP_403_FORBIDDEN
+                )
+        
+        return Response(
+            {"detail": "Invalid credentials"},
+            status=status.HTTP_401_UNAUTHORIZED
+        )
+
+
+class StaffDashboardView(APIView):
+    """Protected staff dashboard requiring session authentication"""
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def get(self, request):
+        # Check if user has staff role
+        if request.user.role not in ['admin', 'compliance', 'lender_partner', 'support']:
+            return Response(
+                {"detail": "Access denied. Staff only."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Log dashboard access
+        AuditLog.objects.create(
+            user=request.user,
+            action='VIEW_SENSITIVE',
+            resource_type='Dashboard',
+            resource_id=0,
+            ip_address=request.META.get('REMOTE_ADDR'),
+            details={'dashboard_type': 'staff'}
+        )
+        
+        # Role-based dashboard data
+        dashboard_data = {
+            "user": request.user.username,
+            "role": request.user.role,
+            "dashboard": "Staff Dashboard",
+            "timestamp": str(timezone.now())
+        }
+        
+        # Add role-specific data
+        if request.user.role == 'admin':
+            dashboard_data['total_merchants'] = Merchant.objects.count()
+            dashboard_data['total_requests'] = FinancingRequest.objects.count()
+            dashboard_data['pending_requests'] = FinancingRequest.objects.filter(status='pending').count()
+        elif request.user.role == 'compliance':
+            dashboard_data['audit_logs_count'] = AuditLog.objects.count()
+            dashboard_data['recent_logs'] = AuditLog.objects.filter(
+                timestamp__gte=timezone.now() - timezone.timedelta(days=7)
+            ).count()
+        elif request.user.role == 'lender_partner':
+            assigned_merchants = request.user.assigned_merchants.all()
+            dashboard_data['assigned_merchants_count'] = assigned_merchants.count()
+            dashboard_data['pending_requests'] = FinancingRequest.objects.filter(
+                merchant__in=assigned_merchants,
+                status='pending'
+            ).count()
+        
+        return Response(dashboard_data)
 
 
 class UserRegistrationView(generics.CreateAPIView):
@@ -104,6 +208,57 @@ class LogoutView(APIView):
             return Response({"detail": "Successfully logged out"}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+# ========== EXPORT CONTROLS VIEW ==========
+
+class ExportDataView(APIView):
+    """Export data with rate limiting for compliance"""
+    permission_classes = [permissions.IsAuthenticated]
+    throttle_classes = [ExportRateThrottle]
+    
+    def get(self, request):
+        # Only admin and compliance can export data
+        if request.user.role not in ['admin', 'compliance']:
+            return Response(
+                {"detail": "Access denied. Export requires admin or compliance role."},
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        # Log the export (audit trail)
+        AuditLog.objects.create(
+            user=request.user,
+            action='EXPORT',
+            resource_type='Data',
+            resource_id=0,
+            ip_address=request.META.get('REMOTE_ADDR'),
+            user_agent=request.META.get('HTTP_USER_AGENT', ''),
+            details={
+                'export_type': 'merchant_data',
+                'timestamp': str(timezone.now())
+            }
+        )
+        
+        # Prepare export data (role-based filtering)
+        if request.user.role == 'admin':
+            merchants = Merchant.objects.all().values('id', 'name', 'email', 'phone', 'business_type')
+        else:  # compliance sees all but can't modify
+            merchants = Merchant.objects.all().values('id', 'name', 'email', 'business_type')
+        
+        # Also export financing requests
+        financing_requests = FinancingRequest.objects.all().values(
+            'id', 'merchant__name', 'amount', 'purpose', 'status', 'created_at'
+        )
+        
+        return Response({
+            "exported_by": request.user.username,
+            "exported_by_role": request.user.role,
+            "exported_at": str(timezone.now()),
+            "merchants": list(merchants),
+            "financing_requests": list(financing_requests),
+            "total_merchants": merchants.count(),
+            "total_requests": financing_requests.count()
+        })
 
 
 # ========== MERCHANT VIEWS (WITH RBAC) ==========
