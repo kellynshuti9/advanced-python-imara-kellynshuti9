@@ -1,1 +1,1 @@
-# API tests package
+﻿# Test package
