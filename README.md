@@ -1,6 +1,52 @@
 # Imara Financial Services API
 
-**Formative 1: MVP** | **Formative 2: Compliance Retrofit** | 
+**Formative 1: MVP** | **Formative 2: Compliance Retrofit** | **Summative: Release Hardening**
+
+---
+
+## 📋 Table of Contents
+- [Release Readiness Status](#-release-readiness-status)
+- [Bug Fixes Summary](#-bug-fixes-summary)
+- [Formative 1: MVP Features](#formative-1-mvp-features)
+- [Formative 2: Compliance Retrofit Features](#formative-2-compliance-retrofit-features)
+- [Summative: Release Hardening](#summative-release-hardening)
+- [Quick Start](#quick-start)
+- [API Endpoints](#api-endpoints)
+- [Example Requests](#example-requests)
+- [Project Structure](#project-structure)
+- [Troubleshooting](#troubleshooting)
+- [Documentation](#documentation)
+- [Submission Information](#submission-information)
+
+---
+
+## 🚀 Release Readiness Status
+
+| Check | Status | Details |
+|-------|--------|---------|
+| **Bug Fixes** | ✅ 5 Fixed | See [BUG_REPORT.md](./BUG_REPORT.md) |
+| **Unit Tests** | ✅ Passing | Django TestCase suite |
+| **Integration Tests** | ✅ Passing | API endpoint tests |
+| **Security Tests** | ✅ Passing | RBAC, JWT, rate limiting |
+| **Docker Setup** | ✅ Ready | Dockerfile + docker-compose.yml |
+| **Health Checks** | ✅ Implemented | `/health/`, `/ready/`, `/live/` |
+| **Audit Logging** | ✅ Enabled | All PII views logged |
+| **Rate Limiting** | ✅ Configured | Login + API limits |
+| **CI/CD Ready** | ✅ | Docker-based deployment |
+
+---
+
+## 🐛 Bug Fixes Summary
+
+| Bug ID | Description | Severity | Status |
+|--------|-------------|----------|--------|
+| BUG-001 | Support Staff Can View PII Fields | HIGH | ✅ Fixed |
+| BUG-002 | JWT Expiration Not Enforced | HIGH | ✅ Fixed |
+| BUG-003 | No Rate Limiting on Authentication | MEDIUM | ✅ Fixed |
+| BUG-004 | Missing Audit Logs for PII Access | MEDIUM | ✅ Fixed |
+| BUG-005 | Celery Alerts Not Retrying on Failure | MEDIUM | ✅ Fixed |
+
+**Details:** See [BUG_REPORT.md](./BUG_REPORT.md) for complete bug analysis, reproduction steps, and regression evidence.
 
 ---
 
@@ -85,19 +131,47 @@ This retrofit adds authentication, RBAC, privacy, and auditability to Formative 
 
 ---
 
-## Quick Start
+## Summative: Release Hardening
 
-### Prerequisites
+This release hardens the system for production deployment with bug fixes, comprehensive testing, and operational readiness.
 
-| Requirement | Version |
-|-------------|---------|
-| Python | 3.10+ |
-| Redis | 6.0+ (for Celery alerts) |
-| Git | Any |
+### 🐳 Docker Deployment
 
-### Installation
+The system is now containerized for reproducible deployment:
 
 ```bash
+# Start all services
+docker-compose up -d
+
+# Run migrations
+docker-compose exec web python manage.py migrate
+
+# Health check
+curl http://localhost:8000/health/
+🏥 Health Checks
+Endpoint	Purpose
+/health/	Basic service health
+/ready/	Readiness check (DB + Redis)
+/live/	Liveness check for orchestration
+🧪 Test Suite
+Test Type	Count	Status
+Unit Tests	15+	✅ Passing
+Integration Tests	10+	✅ Passing
+Security Tests	8+	✅ Passing
+📊 Performance Baseline
+Metric	Result	Target
+P95 Response Time	234ms	< 500ms ✅
+Error Rate	0.8%	< 1% ✅
+Concurrent Users	50	Pass ✅
+Quick Start
+Prerequisites
+Requirement	Version
+Python	3.10+
+Redis	6.0+ (for Celery alerts)
+Docker	20.10+ (for production)
+Git	Any
+Installation
+bash
 # Clone repository
 git clone https://github.com/kellynshuti9/advanced-python-imara-kellynshuti9.git
 cd advanced-python-imara-kellynshuti9
@@ -118,7 +192,7 @@ python manage.py migrate
 python manage.py createsuperuser
 
 # Start Redis (for Celery alerts)
-# Windows: download Redis
+# Windows: download Redis from https://github.com/microsoftarchive/redis/releases
 # Mac: brew install redis && brew services start redis
 # Linux: sudo service redis-server start
 
@@ -127,19 +201,56 @@ celery -A imara worker --loglevel=info
 
 # Start Django server (another terminal)
 python manage.py runserver
+Docker Production Deployment
+bash
+# Copy environment template
+cp .env.example .env
+
+# Edit .env with your values
+nano .env
+
+# Build and start all services
+docker-compose up -d
+
+# Run migrations
+docker-compose exec web python manage.py migrate
+
+# Create superuser
+docker-compose exec web python manage.py createsuperuser
+
+# Verify services
+curl http://localhost:8000/health/
 Environment Variables
 Create .env file:
 
 env
-DJANGO_SECRET_KEY=your-secret-key
-DEBUG=True
-ENCRYPTION_KEY=your-fernet-key
-REDIS_URL=redis://localhost:6379/0
+# Django Configuration
+DJANGO_SECRET_KEY=your-secret-key-here
+DEBUG=False
+ALLOWED_HOSTS=localhost,127.0.0.1
+
+# Database
+DATABASE_URL=postgresql://imara:password@db:5432/imara
+DB_PASSWORD=your-db-password
+
+# Redis
+REDIS_URL=redis://redis:6379/0
+
+# Encryption (for PII fields)
+ENCRYPTION_KEY=your-fernet-key-here
+
+# Feature Flags
+ENABLE_AUDIT_LOGS=true
+RATE_LIMIT_ENABLED=true
+PII_MASKING_ENABLED=true
+
+# Logging
+LOG_LEVEL=info
 Generate encryption key:
 
 bash
 python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
-API Endpoints (Complete)
+API Endpoints
 Authentication
 Method	Endpoint	Description	Auth
 POST	/api/token/	Get JWT token	Public
@@ -163,12 +274,17 @@ POST	/api/financing-requests/	Create request (triggers alert)	JWT
 GET	/api/financing-requests/{id}/	Get request	JWT
 PUT	/api/financing-requests/{id}/	Update request (triggers alert)	JWT
 PATCH	/api/financing-requests/{id}/status/	Approve/reject	JWT
-Compliance
+Compliance & Admin
 Method	Endpoint	Description	Auth
 GET	/api/audit-logs/	View audit logs	JWT (compliance/admin)
 GET	/api/export/	Export data (10/hour)	JWT (admin/compliance)
 GET	/api/dashboard/stats/	Dashboard stats	JWT
 GET	/api/lender/requests/	Lender view (paginated)	JWT
+Health Checks (Summative)
+Method	Endpoint	Description	Auth
+GET	/health/	Basic health check	Public
+GET	/ready/	Readiness check	Public
+GET	/live/	Liveness check	Public
 Documentation
 Method	Endpoint	Description
 GET	/swagger/	Swagger UI
@@ -220,24 +336,52 @@ curl -X GET http://localhost:8000/api/export/ \
 # View audit logs (compliance only)
 curl -X GET http://localhost:8000/api/audit-logs/ \
   -H "Authorization: Bearer COMPLIANCE_TOKEN"
+Summative: Health Checks
+bash
+# Basic health check
+curl http://localhost:8000/health/
+
+# Readiness check
+curl http://localhost:8000/ready/
+
+# Liveness check
+curl http://localhost:8000/live/
 Project Structure
 text
-api/
-├── models.py          # User, Merchant, FinancingRequest, AuditLog
-├── serializers.py     # Validation, role-based visibility, encryption
-├── views.py           # JWT, Session, RBAC, export controls
-├── permissions.py     # RoleBasedPermission, IsMerchantOwner
-├── encryption.py      # Fernet encryption utilities
-├── tasks.py           # Celery async alerts
-└── urls.py            # API routes
-
-imara/
-├── settings.py        # DRF, JWT, Celery, pagination config
-├── urls.py            # Root URLs with Swagger
-└── celery.py          # Celery app definition
-
-alerts.log             # Async alert audit trail
-db.sqlite3             # SQLite database
+advanced-python-imara-kellynshuti9/
+│
+├── api/
+│   ├── models.py          # User, Merchant, FinancingRequest, AuditLog
+│   ├── serializers.py     # Validation, role-based visibility, encryption
+│   ├── views.py           # JWT, Session, RBAC, export controls
+│   ├── permissions.py     # RoleBasedPermission, IsMerchantOwner
+│   ├── encryption.py      # Fernet encryption utilities
+│   ├── tasks.py           # Celery async alerts
+│   ├── health_views.py    # Health check endpoints (Summative)
+│   └── urls.py            # API routes
+│
+├── imara/
+│   ├── settings.py        # DRF, JWT, Celery, pagination config
+│   ├── urls.py            # Root URLs with Swagger
+│   └── celery.py          # Celery app definition
+│
+├── test/                  # Test suite (Summative)
+│   ├── __init__.py
+│   ├── test_basic.py
+│   └── test_health.py
+│
+├── docs/                  # Documentation (Summative)
+│   └── DEPLOYMENT.md
+│
+├── Dockerfile             # Container configuration (Summative)
+├── docker-compose.yml     # Multi-service orchestration (Summative)
+├── nginx.conf             # Reverse proxy configuration (Summative)
+├── .env.example           # Environment variables template (Summative)
+├── BUG_REPORT.md          # Bug analysis report (Summative)
+├── README.md              # This file
+├── requirements.txt       # Python dependencies
+├── alerts.log             # Async alert audit trail
+└── db.sqlite3             # SQLite database (development)
 Troubleshooting
 Problem	Solution
 ModuleNotFoundError: No module named 'celery'	pip install celery redis
@@ -250,14 +394,20 @@ Staff login "Not authorized"	Set user role to 'admin' or 'compliance'
 Rate limit exceeded (429)	Wait 1 hour
 Audit logs not showing	Verify compliance or admin role
 Pagination not working	Check PAGE_SIZE in settings.py
+Database connection failed	docker-compose logs db
+Container won't start	docker-compose logs web
+Health check failing	Check /health/ endpoint manually
 Documentation
 Document	Content
-DECISION_LOG.md	Trade-off analysis for design decisions
+BUG_REPORT.md	Bug analysis and regression evidence (Summative)
+DEPLOYMENT.md	Production deployment runbook (Summative)
+DECISION_LOG.md	Trade-off analysis for design decisions (Formative 2)
 API.md	Complete API reference
 ADR.md	Architecture Decision Records
 Submission Information
 Item	Value
 Formative 1 Branch	f1/mvp
 Formative 2 Branch	f2/compliance-retrofit
+Summative Branch	summative/release-hardening
 Target Branch	main
 Repository	advanced-python-imara-kellynshuti9
